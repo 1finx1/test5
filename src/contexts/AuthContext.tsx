@@ -37,7 +37,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [sessionChecked, setSessionChecked] = useState(false);
 
   // Fetch user profile
   const fetchProfile = async (userId: string) => {
@@ -67,8 +66,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const initializeAuth = async () => {
       try {
         // Get current session
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error } = await supabase.auth.getSession();
         
+        if (error) {
+          console.error('Error getting session:', error);
+          if (mounted) {
+            setLoading(false);
+          }
+          return;
+        }
+
         if (session?.user && mounted) {
           setUser(session.user);
           const userProfile = await fetchProfile(session.user.id);
@@ -80,7 +87,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Error initializing auth:', error);
       } finally {
         if (mounted) {
-          setSessionChecked(true);
           setLoading(false);
         }
       }
@@ -93,20 +99,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       async (event, session) => {
         if (!mounted) return;
 
-        if (event === 'SIGNED_OUT') {
+        if (session?.user) {
+          setUser(session.user);
+          const userProfile = await fetchProfile(session.user.id);
+          if (mounted) {
+            setProfile(userProfile);
+          }
+        } else {
           setUser(null);
           setProfile(null);
-          setLoading(false);
-        } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-          if (session?.user) {
-            setUser(session.user);
-            const userProfile = await fetchProfile(session.user.id);
-            if (mounted) {
-              setProfile(userProfile);
-            }
-          }
-          setLoading(false);
         }
+        
+        setLoading(false);
       }
     );
 
@@ -116,15 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Don't render children until initial session check is complete
-  if (!sessionChecked) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-secondary"></div>
-      </div>
-    );
-  }
-
+  // Rest of your auth methods remain the same...
   const signUp = async (
     email: string,
     password: string,
@@ -162,10 +158,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           console.error('Error creating user profile:', profileError);
           return { error: profileError };
         }
-
-        setUser(data.user);
-        const userProfile = await fetchProfile(data.user.id);
-        setProfile(userProfile);
       }
 
       return { error: null };
