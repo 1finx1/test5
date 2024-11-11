@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, AuthError, PostgrestError } from '@supabase/supabase-js';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { User, AuthError, PostgrestError, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 
 interface UserProfile {
@@ -17,6 +17,8 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  initialized: boolean;
+  error: string | null;
   signUp: (
     email: string,
     password: string,
@@ -29,6 +31,7 @@ interface AuthContextType {
   ) => Promise<{ error: AppError | null }>;
   signOut: () => Promise<void>;
   updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: AppError | null }>;
+  refreshSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -37,9 +40,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Fetch user profile
-  const fetchProfile = async (userId: string) => {
+  // Fetch user profile with retry logic
+  const fetchProfile = useCallback(async (userId: string, retryCount = 3): Promise<UserProfile | null> => {
     try {
       const { data, error } = await supabase
         .from('users')
@@ -48,8 +53,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .single();
 
       if (error) {
-        console.error('Error fetching user profile:', error);
-        return null;
+        if (retryCount > 0) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return fetchProfile(userId, retryCount - 1);
+        }
+        throw error;
       }
 
       return data as UserProfile;
@@ -57,24 +65,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Error fetching user profile:', error);
       return null;
     }
-  };
+  }, []);
+
+  // Refresh session
+  const refreshSession = useCallback(async () => {
+    try {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) throw error;
+
+      if (session?.user) {
+        setUser(session.user);
+        const userProfile = await fetchProfile(session.user.id);
+        setProfile(userProfile);
+      } else {
+        setUser(null);
+        setProfile(null);
+      }
+    } catch (error) {
+      console.error('Error refreshing session:', error);
+      setError('Failed to refresh session');
+    }
+  }, [fetchProfile]);
+
+  // Handle auth state changes
+  const handleAuthChange = useCallback(async (_: string, session: Session | null) => {
+    if (session?.user) {
+      setUser(session.user);
+      const userProfile = await fetchProfile(session.user.id);
+      setProfile(userProfile);
+    } else {
+      setUser(null);
+      setProfile(null);
+    }
+  }, [fetchProfile]);
 
   // Initialize auth state
   useEffect(() => {
     let mounted = true;
+    let retryTimeout: NodeJS.Timeout;
+    let authSubscription: (() => void) | undefined;
 
     const initializeAuth = async () => {
       try {
-        // Get current session
+        setLoading(true);
         const { data: { session }, error } = await supabase.auth.getSession();
         
-        if (error) {
-          console.error('Error getting session:', error);
-          if (mounted) {
-            setLoading(false);
-          }
-          return;
-        }
+        if (error) throw error;
 
         if (session?.user && mounted) {
           setUser(session.user);
@@ -83,42 +119,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setProfile(userProfile);
           }
         }
-      } catch (error) {
-        console.error('Error initializing auth:', error);
-      } finally {
+
+        // Set up auth state change listener
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(handleAuthChange);
+        authSubscription = () => subscription.unsubscribe();
+
         if (mounted) {
           setLoading(false);
+          setInitialized(true);
+        }
+
+      } catch (error) {
+        console.error('Error initializing auth:', error);
+        if (mounted) {
+          setError('Failed to initialize authentication');
+          retryTimeout = setTimeout(initializeAuth, 3000);
         }
       }
     };
 
+    // Start initialization
     initializeAuth();
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_, session) => {
-        if (!mounted) return;
-
-        if (session?.user) {
-          setUser(session.user);
-          const userProfile = await fetchProfile(session.user.id);
-          if (mounted) {
-            setProfile(userProfile);
-          }
-        } else {
-          setUser(null);
-          setProfile(null);
-        }
-        
-        setLoading(false);
-      }
-    );
-
+    // Cleanup function
     return () => {
       mounted = false;
-      subscription.unsubscribe();
+      clearTimeout(retryTimeout);
+      if (authSubscription) {
+        authSubscription();
+      }
     };
-  }, []);
+  }, [fetchProfile, handleAuthChange]);
 
   const signUp = async (
     email: string,
@@ -128,6 +159,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ) => {
     try {
       setLoading(true);
+      setError(null);
+      
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -162,6 +195,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: null };
     } catch (error) {
       console.error('Signup error:', error);
+      setError('Failed to sign up');
       return { error: error as AppError };
     } finally {
       setLoading(false);
@@ -171,6 +205,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async (email: string, password: string) => {
     try {
       setLoading(true);
+      setError(null);
+      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -187,6 +223,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: null };
     } catch (error) {
       console.error('Sign in error:', error);
+      setError('Failed to sign in');
       return { error: error as AppError };
     } finally {
       setLoading(false);
@@ -196,11 +233,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     try {
       setLoading(true);
+      setError(null);
       await supabase.auth.signOut();
       setUser(null);
       setProfile(null);
     } catch (error) {
       console.error('Error signing out:', error);
+      setError('Failed to sign out');
     } finally {
       setLoading(false);
     }
@@ -209,6 +248,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateProfile = async (updates: Partial<UserProfile>) => {
     try {
       setLoading(true);
+      setError(null);
+      
       if (!user) {
         throw new Error('No user logged in');
       }
@@ -228,6 +269,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: null };
     } catch (error) {
       console.error('Error updating profile:', error);
+      setError('Failed to update profile');
       return { error: error as AppError };
     } finally {
       setLoading(false);
@@ -238,10 +280,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     profile,
     loading,
+    initialized,
+    error,
     signUp,
     signIn,
     signOut,
     updateProfile,
+    refreshSession,
   };
 
   return (
