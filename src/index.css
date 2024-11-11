@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-white;
+  }
+
+  select {
+    @apply bg-[#1c1c1c] border-black text-secondary appearance-none;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%235ce1e6' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+    background-position: right 0.5rem center;
+    background-repeat: no-repeat;
+    background-size: 1.5em 1.5em;
+    padding-right: 2.5rem;
+  }
+
+  select option {
+    @apply bg-[#1c1c1c] text-secondary;
+  }
+}
+
+@layer components {
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary;
+  }
+  
+  .gradient-border {
+    @apply border-transparent bg-gradient-to-r from-primary to-secondary;
+    border: double 1px transparent;
+    background-image: linear-gradient(#1c1c1c, #1c1c1c), 
+                     linear-gradient(to right, #8c52ff, #5ce1e6);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+  
+  .nav-link {
+    @apply px-4 py-2 rounded-lg transition-all duration-300 hover:text-secondary;
+  }
+  
+  .btn-primary {
+    @apply px-6 py-3 rounded-lg bg-gradient-to-r from-primary to-secondary text-white font-semibold 
+           hover:opacity-90 transition-all duration-300 shadow-lg;
+  }
+  
+  .btn-secondary {
+    @apply px-6 py-3 rounded-lg gradient-border text-white font-semibold 
+           hover:opacity-90 transition-all duration-300;
+  }
+}
